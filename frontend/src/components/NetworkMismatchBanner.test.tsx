@@ -6,6 +6,8 @@ import { vi } from 'vitest';
 // Mock isMainnetEnabled
 vi.mock('../config/networks', () => ({
   isMainnetEnabled: vi.fn(() => true),
+  STELLAR_MAINNET_PASSPHRASE: 'Public Global Stellar Network ; September 2015',
+  STELLAR_TESTNET_PASSPHRASE: 'Test SDF Network ; September 2015',
 }));
 
 const mockNetworkState = {
@@ -158,4 +160,3 @@ describe('NetworkMismatchBanner', () => {
     expect(screen.getByText(/Order was created for/i)).toBeInTheDocument();
   });
 });
-

@@ -1,18 +1,17 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
+import { beforeEach, vi } from 'vitest';
 import { AuditGateTimeline } from '../AuditGateTimeline';
 import { useOrder } from '../../hooks/useOrder';
-import { OrderStatus } from '@over-sync/coordinator';
+import { OrderStatus } from '../../lib/orderRecovery';
 
 // Mock the useOrder hook
-jest.mock('../../hooks/useOrder');
+vi.mock('../../hooks/useOrder');
 
-const mockUseOrder = useOrder as jest.MockedFunction<typeof useOrder>;
+const mockUseOrder = vi.mocked(useOrder);
 
 describe('AuditGateTimeline', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it('renders all timeline steps', () => {
     mockUseOrder.mockReturnValue({ order: null, error: null });
@@ -57,14 +56,14 @@ describe('AuditGateTimeline', () => {
       order: { status: OrderStatus.Pending },
       error: null
     });
-    render(<AuditGateTimeline orderId="123" />);
+    const { rerender } = render(<AuditGateTimeline orderId="123" />);
     
     // Simulate local click (no status change)
     mockUseOrder.mockReturnValue({
       order: { status: OrderStatus.Pending },
       error: null
     });
-    render(<AuditGateTimeline orderId="123" />);
+    rerender(<AuditGateTimeline orderId="123" />);
     
     // Timeline should not advance
     expect(screen.getByText('Initiate').parentElement).toHaveClass('current');
@@ -73,18 +72,19 @@ describe('AuditGateTimeline', () => {
 
   it('does not move timeline backward for older order responses', () => {
     // Start with a more advanced status
+    const { rerender } = render(<AuditGateTimeline orderId="123" />);
     mockUseOrder.mockReturnValue({
       order: { status: OrderStatus.Escrowed },
       error: null
     });
-    render(<AuditGateTimeline orderId="123" />);
+    rerender(<AuditGateTimeline orderId="123" />);
     
     // Simulate receiving an older response with Pending status
     mockUseOrder.mockReturnValue({
       order: { status: OrderStatus.Pending },
       error: null
     });
-    render(<AuditGateTimeline orderId="123" />);
+    rerender(<AuditGateTimeline orderId="123" />);
     
     // Timeline should remain at Escrow
     expect(screen.getByText('Initiate').parentElement).toHaveClass('complete');

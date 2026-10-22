@@ -197,12 +197,12 @@ describe('fetchCoordinatorOrders', () => {
       if (url.includes('address=0xEth')) {
         return {
           ok: true,
-          json: async () => ({ transactions: [makeCoordinatorOrder({ id: 'eth-order' })] }),
+          json: async () => ({ transactions: [makeCoordinatorOrder({ id: 'eth-order', hashlock: '0xethhashlock' })] }),
         } as Response;
       }
       return {
         ok: true,
-        json: async () => ({ transactions: [makeCoordinatorOrder({ id: 'stellar-order' })] }),
+        json: async () => ({ transactions: [makeCoordinatorOrder({ id: 'stellar-order', hashlock: '0xstellarhashlock' })] }),
       } as Response;
     }) as typeof fetch;
 

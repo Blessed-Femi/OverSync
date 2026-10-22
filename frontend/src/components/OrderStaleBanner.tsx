@@ -1,7 +1,12 @@
 import type { FreshnessResult } from '../lib/orderFreshness';
 
 interface Props {
-  freshness: FreshnessResult;
+  freshness?: FreshnessResult;
+  order?: unknown;
+  isStale?: boolean;
+  freshnessError?: string | null;
+  onRetry?: () => void;
+  isRetrying?: boolean;
 }
 
 /**
@@ -16,8 +21,38 @@ interface Props {
  *   • No action required from the user unless they can refund
  *   • Visually distinct from the refund buttons (different palette)
  */
-export default function OrderStaleBanner({ freshness }: Props) {
-  if (freshness.label === 'fresh') return null;
+export default function OrderStaleBanner({
+  freshness,
+  isStale = false,
+  freshnessError = null,
+  onRetry,
+  isRetrying = false,
+}: Props) {
+  if (freshnessError) {
+    return (
+      <div role="alert" className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 p-3 text-left text-xs text-amber-100">
+        <p className="font-semibold">Could not verify order freshness</p>
+        <p className="mt-1">{freshnessError}</p>
+        <p className="mt-1">The restored order is still displayed.</p>
+        {onRetry && (
+          <button type="button" onClick={onRetry} disabled={isRetrying} className="mt-2 underline disabled:opacity-60">
+            {isRetrying ? 'Retrying...' : 'Retry freshness'}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (isStale) {
+    return (
+      <div role="alert" className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 p-3 text-left text-xs text-amber-100">
+        <p className="font-semibold">Order is stale or expired</p>
+        <p className="mt-1">Claim and refund actions are disabled until freshness can be verified.</p>
+      </div>
+    );
+  }
+
+  if (!freshness || freshness.label === 'fresh') return null;
 
   const config = BANNER_CONFIG[freshness.label];
 

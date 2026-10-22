@@ -14,6 +14,9 @@ vi.mock('@stellar/stellar-sdk', () => ({
 
 vi.mock('../config/networks', () => ({
   isTestnet: vi.fn(() => true),
+  isMainnetEnabled: vi.fn(() => false),
+  STELLAR_MAINNET_PASSPHRASE: 'Public Global Stellar Network ; September 2015',
+  STELLAR_TESTNET_PASSPHRASE: 'Test SDF Network ; September 2015',
   getCurrentNetwork: vi.fn(() => ({
     ethereum: {
       id: 11155111,
@@ -41,6 +44,7 @@ vi.mock('../lib/parseHtlcReceipt', () => ({
 
 vi.mock('../lib/sanitizeAmountInput', () => ({
   sanitizeAmountInput: vi.fn((val: string) => val),
+  parseAmountToBaseUnits: vi.fn(() => 1n),
 }));
 
 // Mock the backend status hook so we can drive readiness from tests.
@@ -49,7 +53,7 @@ vi.mock('../lib/useBackendStatus', () => ({
   useBackendStatus: (...args: unknown[]) => useBackendStatusMock(...args),
 }));
 
-const nullSigner = vi.fn().mockResolved('');
+const nullSigner = vi.fn().mockResolvedValue('');
 
 const testnetState: NetworkModeState = {
   mode: 'testnet',
@@ -68,31 +72,31 @@ const testnetState: NetworkModeState = {
 };
 
 const readyStatus = {
-  status: 'ready' as const,
-  loading: false,
-  error: null,
-  refresh: vi.fn(),
+  status: 'reachable' as const,
+  lastChecked: null,
+  errorMessage: null,
+  retry: vi.fn(),
 };
 
 const notReadyStatus = {
-  status: 'not-ready' as const,
-  loading: false,
-  error: null,
-  refresh: vi.fn(),
+  status: 'degraded' as const,
+  lastChecked: null,
+  errorMessage: null,
+  retry: vi.fn(),
 };
 
 const loadingStatus = {
-  status: 'loading' as const,
-  loading: true,
-  error: null,
-  refresh: vi.fn(),
+  status: 'checking' as const,
+  lastChecked: null,
+  errorMessage: null,
+  retry: vi.fn(),
 };
 
 const downStatus = {
-  status: 'down' as const,
-  loading: false,
-  error: 'coordinator unreachable',
-  refresh: vi.fn(),
+  status: 'unavailable' as const,
+  lastChecked: null,
+  errorMessage: 'coordinator unreachable',
+  retry: vi.fn(),
 };
 
 describe('BridgeForm network mismatch guardrails', () => {
@@ -103,7 +107,7 @@ describe('BridgeForm network mismatch guardrails', () => {
     Object.defineProperty(window, 'ethereum', {
       writable: true,
       value: {
-        request: vi.fn().mockResolved('0xaa36a7'),
+        request: vi.fn().mockResolvedValue('0xaa36a7'),
         selectedAddress: '0x1234567890123456789012345678901234567890',
       },
     });
@@ -123,8 +127,8 @@ describe('BridgeForm network mismatch guardrails', () => {
     // Button is disabled because amount is empty, but text shows "Bridge"
     // and no mismatch warning is rendered
     expect(submitBtn).toHaveTextContent('Bridge');
-    expect(screen.queryByText(/Network Mismatch/i)).not.toBeITheDocument();
-    expect(screen.queryByText(/Switch MetaMask/i)).not.toBeITheDocument();
+    expect(screen.queryByText(/Network Mismatch/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Switch MetaMask/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Switch Freighter/i)).not.toBeInTheDocument();
   });
 
@@ -301,50 +305,73 @@ describe('BridgeForm network mismatch guardrails', () => {
 describe('BridgeForm coordinator health gating', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     Object.defineProperty(window, 'ethereum', {
       writable: true,
       value: {
-        request: vi.fn().mockResolved('0xaa36a7'),
+        request: vi.fn().mockResolvedValue('0xaa36a7'),
         selectedAddress: '0x1234567890123456789012345678901234567890',
       },
     });
   });
 
-  const renderForm = () =>
+  const renderForm = (withOrder = false) => {
+    const orderId = 'health-gate-order';
+    if (withOrder) {
+      localStorage.setItem('oversync_active_order_id', orderId);
+      localStorage.setItem('oversync_active_order', JSON.stringify({
+        id: orderId,
+        direction: 'eth_to_xlm',
+        status: 'pending',
+        networkMode: 'testnet',
+        src: { orderId: '1', amount: '1000000000000000000', timelock: 0 },
+        dst: { amount: '10000000' },
+      }));
+    }
     render(
       <BridgeForm
         ethAddress="0x1234567890123456789012345678901234567890"
         stellarAddress="GABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
         signStellarTransaction={nullSigner}
         networkState={testnetState}
+        initialOrderId={withOrder ? orderId : undefined}
       />,
     );
+  };
 
-  test('not-ready health disables submit, claim, and refund', () => {
+  test('not-ready health disables submit when there is no active order', () => {
     useBackendStatusMock.mockReturnValue(notReadyStatus);
     renderForm();
 
-    expect(screen.getByRole('button', { name: /Bridge/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Claim/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Refund/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Bridge|Coordinator not ready|Checking coordinator\.\.\.)$/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Claim order/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Refund order/i })).not.toBeInTheDocument();
   });
 
-  test('loading health disables submit, claim, and refund', () => {
+  test('loading health disables submit when there is no active order', () => {
     useBackendStatusMock.mockReturnValue(loadingStatus);
     renderForm();
 
-    expect(screen.getByRole('button', { name: /Bridge/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Claim/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Refund/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Bridge|Coordinator not ready|Checking coordinator\.\.\.)$/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Claim order/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Refund order/i })).not.toBeInTheDocument();
   });
 
-  test('down health disables submit, claim, and refund', () => {
+  test('down health disables submit when there is no active order', () => {
     useBackendStatusMock.mockReturnValue(downStatus);
     renderForm();
 
-    expect(screen.getByRole('button', { name: /Bridge/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Claim/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Refund/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Bridge|Coordinator not ready|Checking coordinator\.\.\.)$/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Claim order/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Refund order/i })).not.toBeInTheDocument();
+  });
+
+  test('not-ready health disables claim and refund actions for a recovered order', () => {
+    useBackendStatusMock.mockReturnValue(notReadyStatus);
+    renderForm(true);
+
+    expect(screen.getByRole('button', { name: 'Claim order' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refund order' })).toBeDisabled();
   });
 
   test('ready health enables submit when other guards pass', () => {
@@ -353,12 +380,12 @@ describe('BridgeForm coordinator health gating', () => {
 
     // Amount is empty so the button is disabled, but the label should be 'Bridge'
     // and not a health-related blocked label.
-    const submitBtn = screen.getByRole('button', { name: /Bridge/i });
+    const submitBtn = screen.getByRole('button', { name: /^Bridge$/i });
     expect(submitBtn).toHaveTextContent('Bridge');
   });
 
   test('wake action does not post an order', () => {
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolved({
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => ({ status: 'ready' }),
     } as Response);
@@ -393,7 +420,7 @@ describe('BridgeForm coordinator health gating', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: /Bridge/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Bridge|Coordinator not ready|Checking coordinator\.\.\.)$/i })).toBeDisabled();
 
     // Newer response arrives first.
     useBackendStatusMock.mockReturnValue(readyStatus);
@@ -417,11 +444,11 @@ describe('BridgeForm coordinator health gating', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: /Bridge/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Bridge|Coordinator not ready|Checking coordinator\.\.\.)$/i })).toBeDisabled();
   });
 
   test('wake calls health again and not the order route', () => {
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolved({
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => ({ status: 'ready' }),
     } as Response);
