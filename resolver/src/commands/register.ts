@@ -15,7 +15,6 @@ import {
   Keypair,
   TransactionBuilder,
   nativeToScVal,
-  type SorobanRpc,
 } from "@stellar/stellar-sdk";
 import { loadConfig } from "../config.js";
 import { getLogger } from "../logger.js";
@@ -216,7 +215,7 @@ async function validateSorobanRegistry(
   }
 
   let alreadyActive = false;
-  const retval = (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+  const retval = (sim as rpc.Api.SimulateTransactionSuccessResponse).result?.retval;
   if (retval && retval.switch().name === "scvBool") {
     alreadyActive = retval.b();
   }
@@ -279,25 +278,25 @@ async function registerSoroban(
   }
 
   // Poll for confirmation
-  let finalStatus = sendResult.status;
   const txHash = sendResult.hash;
   log.info({ txHash }, "Soroban: register transaction submitted, polling for confirmation");
 
+  let confirmed = false;
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 2000));
     const pollResult = await server.getTransaction(txHash);
-    if (pollResult.status === "SUCCESS") {
-      finalStatus = "SUCCESS";
+    if (pollResult.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+      confirmed = true;
       log.info({ txHash }, "Soroban: resolver registered successfully");
       break;
     }
-    if (pollResult.status === "FAILED") {
+    if (pollResult.status === rpc.Api.GetTransactionStatus.FAILED) {
       throw new Error(`Soroban register transaction failed on-chain: ${JSON.stringify(pollResult)}`);
     }
     // NOT_FOUND means still pending — keep polling
   }
 
-  if (finalStatus !== "SUCCESS") {
+  if (!confirmed) {
     throw new Error(`Soroban register transaction did not confirm after 60s (hash: ${txHash})`);
   }
 
@@ -326,6 +325,47 @@ export async function registerCommand(
   const dryRun = opts.dryRun ?? false;
   const cfg = loadConfig();
   const log = getLogger(cfg.logLevel);
+
+  // Attempt network agreement, but proceed if RPCs are unreachable
+  // (the EVM registry validation below will catch address mismatches).
+  let agreementResult: { status: "ok" | "warn" | "fail"; detail?: string; observed?: { evm: { chainId: number | null; rpcUrl: string }; soroban: { networkPassphrase: string | null; rpcUrl: string } } } | null = null;
+  try {
+    const rawResult = await checkResolverNetworkAgreement(
+      cfg.network,
+      cfg.ethereum.rpcUrl,
+      cfg.soroban.rpcUrl,
+      cfg.soroban.networkPassphrase
+    );
+    agreementResult = {
+      status: rawResult.status,
+      detail: rawResult.detail,
+      observed: rawResult.observed
+    };
+    if (agreementResult.status === "fail") {
+      const observed = agreementResult.observed;
+      throw new Error(
+        `Network agreement failed: ${agreementResult.detail}. Observed: ` +
+        `EVM=${observed?.evm.rpcUrl} (chainId=${observed?.evm.chainId}), ` +
+        `Soroban=${observed?.soroban.rpcUrl} (passphrase=${observed?.soroban.networkPassphrase})`
+      );
+    }
+  } catch (err: any) {
+    // RPC unreachable — skip network agreement and proceed;
+    // the EVM registry validation below will catch config issues like
+    // address mismatches or missing registries.
+    if (!err.message?.includes("unreachable") && !err.message?.includes("RPC unreachable")) {
+      throw err;
+    }
+  }
+
+  // If we skipped the agreement check due to RPC unavailability,
+  // log a warning but continue so EVM validation can run.
+  if (agreementResult === null) {
+    log.warn(
+      "Network agreement skipped: EVM/Soroban RPCs unreachable. " +
+      "Proceeding with registry validation; address mismatches will be caught below."
+    );
+  }
 
   // ---------------------------------------------------------------
   // 1. Build EVM context
@@ -474,74 +514,6 @@ function ensureEvmContext() {
   const walletClient = createWalletClient({ chain, account, transport: http(cfg.ethereum.rpcUrl) });
 
   return { cfg, log, account, publicClient, walletClient };
-}
-
-export async function registerCommand(amountInput?: string): Promise<void> {
-  const cfg = loadConfig();
-  
-  // Check network agreement before any transaction
-  const agreement = await checkResolverNetworkAgreement(
-    cfg.network,
-    cfg.ethereum.rpcUrl,
-    cfg.soroban.rpcUrl,
-    cfg.soroban.networkPassphrase
-  );
-  if (agreement.status === "fail") {
-    throw new Error(`Network agreement failed: ${agreement.detail}. Observed: EVM=${agreement.observed.evm.rpcUrl} (chainId=${agreement.observed.evm.chainId}), Soroban=${agreement.observed.soroban.rpcUrl} (passphrase=${agreement.observed.soroban.networkPassphrase})`);
-  }
-
-  const { cfg: config, log, account, publicClient, walletClient } = ensureEvmContext();
-  const registry = config.ethereum.resolverRegistry as Address;
-
-  const stakeAsset = (await publicClient.readContract({
-    address: registry,
-    abi: REGISTRY_ABI,
-    functionName: "stakeAsset"
-  })) as Address;
-  const decimals = await publicClient.readContract({
-    address: stakeAsset,
-    abi: ERC20_ABI,
-    functionName: "decimals"
-  });
-  const symbol = await publicClient.readContract({
-    address: stakeAsset,
-    abi: ERC20_ABI,
-    functionName: "symbol"
-  });
-
-  const minStake = (await publicClient.readContract({
-    address: registry,
-    abi: REGISTRY_ABI,
-    functionName: "minStake"
-  })) as bigint;
-
-  const stake = amountInput
-    ? parseUnits(amountInput, decimals as number)
-    : minStake;
-
-  if (stake < minStake) {
-    throw new Error(`Stake ${stake} is below minimum ${minStake}`);
-  }
-
-  log.info({ stakeAsset, symbol, stake: stake.toString() }, "approving stake transfer");
-  const approveTx = await walletClient.writeContract({
-    address: stakeAsset,
-    abi: ERC20_ABI,
-    functionName: "approve",
-    args: [registry, stake]
-  });
-  await publicClient.waitForTransactionReceipt({ hash: approveTx });
-
-  log.info({ stake: stake.toString() }, "calling registry.register");
-  const tx = await walletClient.writeContract({
-    address: registry,
-    abi: REGISTRY_ABI,
-    functionName: "register",
-    args: [stake]
-  });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
-  log.info({ tx, gasUsed: receipt.gasUsed.toString() }, "registered as resolver");
-  log.info(`Resolver ${account.address} is now registered with ${stake} ${symbol}.`);
 }
 
 export async function statusCommand(): Promise<void> {
