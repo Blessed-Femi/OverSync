@@ -272,7 +272,8 @@ describe("OrderService.announce — quote freshness gate", () => {
       toAsset: BASE_ANNOUNCE.dstAsset,
       amount: BASE_ANNOUNCE.srcAmount,
       fromNetwork: BASE_ANNOUNCE.srcChain,
-      toNetwork: BASE_ANNOUNCE.dstChain
+      toNetwork: BASE_ANNOUNCE.dstChain,
+      dstAmount: BASE_ANNOUNCE.dstAmount
     });
   });
 

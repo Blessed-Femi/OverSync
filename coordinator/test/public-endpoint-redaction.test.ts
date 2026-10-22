@@ -416,7 +416,17 @@ describe("Public Endpoints — Redaction", () => {
     it("omits order and quote preimages", async () => {
       const app = makeOrderSecretsQuotesApp();
       const order = await request(app).get("/api/orders/order-1").expect(200);
-      const quote = await request(app).get("/api/quotes/eth-xlm").expect(200);
+      const quote = await request(app)
+        .get("/api/quotes/eth-xlm")
+        .query({
+          srcChain: "ethereum",
+          srcAsset: "native",
+          srcAmount: "1",
+          dstChain: "stellar",
+          dstAsset: "native",
+          dstAmount: "1"
+        })
+        .expect(200);
 
       expect(JSON.stringify(order.body)).not.toContain(SECRETS.preimage);
       expect(order.body.secret).toEqual({ revealed: true, revealedTx: null });

@@ -1,5 +1,8 @@
 export type TimelockValidationError = 'TIMELOCKS_REVERSED' | 'GAP_TOO_SMALL';
 
+/** Which reveal window has closed (#254). */
+export type SecretWindowError = 'SRC_TIMELOCK_EXPIRED' | 'DST_TIMELOCK_EXPIRED';
+
 export type RefundChain = 'ethereum' | 'stellar';
 
 export interface RefundEligibility {
